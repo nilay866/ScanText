@@ -3,6 +3,7 @@ import { RekognitionClient, DetectTextCommand } from '@aws-sdk/client-rekognitio
 
 // Ensure the code runs dynamically, as it depends on an external API and POST body
 export const dynamic = 'force-dynamic';
+export const maxDuration = 30; // seconds — allow time for large images
 
 export async function POST(req: NextRequest) {
   try {
