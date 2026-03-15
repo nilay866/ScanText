@@ -320,6 +320,34 @@ export default function EditorPage() {
       ctx.drawImage(image, 0, 0);
     }
 
+    // --- Anti-Screenshot Watermark Overlay ---
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.font = 'bold 32px sans-serif'; 
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)'; // Translucent white
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';     // Dark outline for visibility on all backgrounds
+    ctx.lineWidth = 1;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    
+    // Rotate canvas for diagonal watermark
+    ctx.rotate(-Math.PI / 6); // -30 degrees
+    
+    // Calculate bounds to fill the rotated canvas area
+    const diagonal = Math.sqrt(image.width * image.width + image.height * image.height);
+    const stepX = 500;
+    const stepY = 150;
+    
+    for (let x = -diagonal; x < diagonal * 2; x += stepX) {
+      for (let y = -diagonal; y < diagonal * 2; y += stepY) {
+        const text = 'ScanText Preview · Pay ₹1 to Export';
+        ctx.fillText(text, x, y);
+        ctx.strokeText(text, x, y);
+      }
+    }
+    ctx.restore();
+    // ------------------------------------------
+
     // Draw bounding boxes
     regions.forEach((region) => {
       const isSelected = region.id === selectedRegionId;
