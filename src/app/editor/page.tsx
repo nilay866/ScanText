@@ -809,7 +809,7 @@ export default function EditorPage() {
             title="Back to upload"
           >
             <ArrowLeft size={15} />
-            New
+            <span className="btn-text">New</span>
           </button>
         </div>
 
@@ -820,7 +820,7 @@ export default function EditorPage() {
             title="Select & Edit Text (click to select, click again or double-click to edit)"
           >
             <Type size={15} />
-            Select
+            <span className="btn-text">Select</span>
           </button>
           <button
             className={`toolbar-btn ${mode === 'pan' ? 'primary' : ''}`}
@@ -828,7 +828,7 @@ export default function EditorPage() {
             title="Pan Canvas"
           >
             <Move size={15} />
-            Pan
+            <span className="btn-text">Pan</span>
           </button>
 
           <div style={{ width: 1, height: 24, background: 'var(--border-color)', margin: '0 0.25rem' }} />
@@ -876,7 +876,7 @@ export default function EditorPage() {
               title={hasEdits ? 'Export (₹1 per download)' : 'Make edits to export'}
             >
               <Download size={15} />
-              Export · ₹1
+              <span className="btn-text">Export · ₹1</span>
               <ChevronDown size={14} style={{ marginLeft: 4 }} />
             </button>
             {showExportMenu && hasEdits && (

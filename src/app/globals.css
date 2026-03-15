@@ -553,3 +553,84 @@ html, body {
 .toast.success svg {
   color: var(--success);
 }
+
+/* =====================================
+   MOBILE RESPONSIVENESS
+   ===================================== */
+
+@media (max-width: 768px) {
+  /* Upload Page */
+  .upload-page {
+    padding: 1rem;
+  }
+
+  .upload-logo h1 {
+    font-size: 1.5rem;
+  }
+
+  .upload-header p {
+    font-size: 1rem;
+    padding: 0 1rem;
+  }
+
+  .upload-zone {
+    padding: 2rem 1rem;
+    min-height: 250px;
+  }
+
+  .upload-features {
+    flex-direction: column;
+    gap: 1rem;
+    align-items: center;
+  }
+
+  /* Editor Toolbar */
+  .editor-toolbar {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    justify-content: center;
+    padding: 0.75rem;
+  }
+
+  .toolbar-left, .toolbar-center, .toolbar-right {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+
+  .toolbar-brand {
+    border-right: none;
+    padding-right: 0;
+    margin-right: 0.5rem;
+  }
+
+  .toolbar-btn {
+    padding: 0.5rem 0.6rem;
+  }
+
+  /* Hide button text on very small screens to save space */
+  .btn-text {
+    display: none;
+  }
+
+  /* Make zoom display smaller */
+  .zoom-display {
+    min-width: 50px;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.75rem;
+  }
+
+  /* Fix export dropdown alignment so it doesn't bleed off screen */
+  .export-dropdown-wrapper {
+    position: static !important;
+  }
+
+  .export-dropdown-menu {
+    right: 1rem !important;
+    left: 1rem;
+    top: auto;
+    width: auto;
+    margin-top: 0.5rem;
+    z-index: 1000;
+  }
+}
