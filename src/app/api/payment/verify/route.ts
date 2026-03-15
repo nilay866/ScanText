@@ -1,49 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
+import { createDownloadToken } from '@/lib/tokenStore';
 
 export const dynamic = 'force-dynamic';
-
-/**
- * In-memory token store.
- * In production you'd use Redis or a database, but for a single-instance
- * Next.js deployment this is perfectly fine.
- */
-interface DownloadToken {
-  token: string;
-  createdAt: number;
-  used: boolean;
-}
-
-const tokenStore = new Map<string, DownloadToken>();
-
-// Cleanup expired tokens every 10 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, val] of tokenStore) {
-    if (now - val.createdAt > 10 * 60 * 1000) {
-      tokenStore.delete(key);
-    }
-  }
-}, 10 * 60 * 1000);
-
-/**
- * Validate a download token — called by the export route.
- * Returns true and deletes the token (one-time use) if valid.
- */
-export function validateAndConsumeToken(token: string): boolean {
-  const entry = tokenStore.get(token);
-  if (!entry) return false;
-  if (entry.used) return false;
-  // Tokens expire after 5 minutes
-  if (Date.now() - entry.createdAt > 5 * 60 * 1000) {
-    tokenStore.delete(token);
-    return false;
-  }
-  entry.used = true;
-  tokenStore.delete(token);
-  return true;
-}
 
 /**
  * POST /api/payment/verify
@@ -86,12 +45,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Payment verified — issue a one-time download token
-    const token = uuidv4();
-    tokenStore.set(token, {
-      token,
-      createdAt: Date.now(),
-      used: false,
-    });
+    const token = createDownloadToken();
 
     return NextResponse.json({ success: true, downloadToken: token });
   } catch (error: any) {

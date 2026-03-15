@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { validateAndConsumeToken } from '../payment/verify/route';
+import { validateAndConsumeToken } from '@/lib/tokenStore';
 
 export const dynamic = 'force-dynamic';
 
