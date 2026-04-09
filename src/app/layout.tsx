@@ -22,6 +22,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
+        {/* Google Fonts preconnect for faster font loading */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <script src="https://checkout.razorpay.com/v1/checkout.js" async></script>
       </head>
       <body>{children}</body>

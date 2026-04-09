@@ -1,9 +1,10 @@
 // Text detection pipeline — bounding box extraction, line grouping, filtering
 import { v4 as uuidv4 } from 'uuid';
-import { TextRegion, RawWord } from './types';
+import { TextRegion, RawWord, WordBbox, DetectedPlatform } from './types';
 import {
   estimateFontSize,
   estimateFontWeight,
+  estimateFontWeightNumeric,
   estimateTextColor,
   sampleBackgroundColor,
 } from './styleEstimation';
@@ -64,6 +65,7 @@ export function groupWordsIntoLines(words: RawWord[]): RawWord[][] {
 
 /**
  * Merge words in a line into a single text region.
+ * Now also returns per-word bounding boxes for precise rendering.
  */
 function mergeLineWords(words: RawWord[]): {
   text: string;
@@ -72,6 +74,7 @@ function mergeLineWords(words: RawWord[]): {
   width: number;
   height: number;
   avgConfidence: number;
+  wordBboxes: WordBbox[];
 } {
   const text = words.map(w => w.text).join(' ');
   const x = Math.min(...words.map(w => w.bbox.x0));
@@ -80,6 +83,15 @@ function mergeLineWords(words: RawWord[]): {
   const y1 = Math.max(...words.map(w => w.bbox.y1));
   const avgConfidence = words.reduce((sum, w) => sum + w.confidence, 0) / words.length;
 
+  // Build per-word bounding boxes
+  const wordBboxes: WordBbox[] = words.map(w => ({
+    x0: w.bbox.x0,
+    y0: w.bbox.y0,
+    x1: w.bbox.x1,
+    y1: w.bbox.y1,
+    text: w.text,
+  }));
+
   return {
     text,
     x,
@@ -87,6 +99,7 @@ function mergeLineWords(words: RawWord[]): {
     width: x1 - x,
     height: y1 - y,
     avgConfidence,
+    wordBboxes,
   };
 }
 
@@ -105,10 +118,12 @@ export function filterWords(words: RawWord[], minConfidence = 50, minArea = 25):
 
 /**
  * Build TextRegion objects from grouped lines with style estimation.
+ * Optionally accepts a detected platform for font matching.
  */
 export function buildTextRegions(
   lines: RawWord[][],
-  imageData: ImageData
+  imageData: ImageData,
+  platform?: DetectedPlatform
 ): TextRegion[] {
   const regions: TextRegion[] = [];
 
@@ -117,6 +132,7 @@ export function buildTextRegions(
     const bgColor = sampleBackgroundColor(imageData, merged.x, merged.y, merged.width, merged.height);
     const fontSize = estimateFontSize(merged.height);
     const fontWeight = estimateFontWeight(imageData, merged.x, merged.y, merged.width, merged.height, bgColor);
+    const fontWeightNumeric = estimateFontWeightNumeric(imageData, merged.x, merged.y, merged.width, merged.height, bgColor);
     const color = estimateTextColor(imageData, merged.x, merged.y, merged.width, merged.height, bgColor);
 
     // Filter out falsely detected empty noise
@@ -140,6 +156,10 @@ export function buildTextRegions(
       backgroundColor: bgColor.hex,
       isEditing: false,
       isSelected: false,
+      // New pixel-perfect fields
+      wordBboxes: merged.wordBboxes,
+      detectedPlatform: platform || 'unknown',
+      fontWeightNumeric,
     });
   });
 
@@ -149,8 +169,12 @@ export function buildTextRegions(
 /**
  * Full text detection pipeline: filter → group → style → regions.
  */
-export function detectTextRegions(words: RawWord[], imageData: ImageData): TextRegion[] {
+export function detectTextRegions(
+  words: RawWord[],
+  imageData: ImageData,
+  platform?: DetectedPlatform
+): TextRegion[] {
   const filtered = filterWords(words);
   const lines = groupWordsIntoLines(filtered);
-  return buildTextRegions(lines, imageData);
+  return buildTextRegions(lines, imageData, platform);
 }

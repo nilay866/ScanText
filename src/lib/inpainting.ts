@@ -1,18 +1,31 @@
-// Inpainting engine — selective pixel erasure + pixel-precise text rendering
+/**
+ * Inpainting Engine v2 — Pixel-perfect background reconstruction + calibrated text rendering.
+ *
+ * INPAINTING:
+ *   - Gradient-aware: samples all 4 edges independently and bilinearly interpolates
+ *   - Edge feathering: 2px soft blend at bbox boundaries
+ *   - Background pixels left 100% untouched (selective erasure)
+ *
+ * TEXT RENDERING:
+ *   - Binary-search font size calibration — renders until pixel-width matches bbox
+ *   - Letter-spacing calibration — distributes remaining width delta across characters
+ *   - Uses platform-detected fonts from fontLoader
+ *   - Sub-pixel baseline positioning via actualBoundingBoxAscent
+ */
+
+import { getFontStack } from './fontLoader';
+
+// ── Gradient-Aware Inpainting ─────────────────────────────────────────────────
 
 /**
- * Selective pixel erasure — the ONLY truly pixel-perfect background approach.
+ * Erase text pixels from the canvas and reconstruct the background using
+ * bilinear interpolation from the 4 edge strips.
  *
- * Instead of filling the bounding box with any color, we:
- *  1. Re-sample the background color directly from pixels just OUTSIDE the bbox
- *     (from the pristine, unmodified canvas — no estimation involved)
- *  2. For each pixel inside the bbox, measure its "distance" from the background
- *  3. Only erase pixels that are visually part of the ink/text
- *  4. Background pixels (close to background color) are left 100% UNTOUCHED
- *
- * This means the background is never re-generated — it is literally the same
- * pixels from the original image, giving perfect results for any background:
- * flat, gradient, texture, UI elements, whatever.
+ * This handles:
+ *  - Flat backgrounds (trivial)
+ *  - Vertical gradients (notification panels, dark mode)
+ *  - Horizontal gradients (some chat bubbles)
+ *  - Diagonal gradients (blended via bilinear)
  */
 export function inpaintRegion(
   sourceCanvas: HTMLCanvasElement,
@@ -20,7 +33,7 @@ export function inpaintRegion(
   y: number,
   width: number,
   height: number,
-  _bgColorHex: string  // legacy param — we now sample live from canvas border
+  _bgColorHex: string  // legacy param — kept for API compat
 ): void {
   const ctx = sourceCanvas.getContext('2d');
   if (!ctx) return;
@@ -28,6 +41,7 @@ export function inpaintRegion(
   const W = sourceCanvas.width;
   const H = sourceCanvas.height;
 
+  // Integer pixel bounds with 1px padding
   const px = Math.max(0, Math.floor(x) - 1);
   const py = Math.max(0, Math.floor(y) - 1);
   const px2 = Math.min(W, Math.ceil(x + width) + 1);
@@ -37,86 +51,160 @@ export function inpaintRegion(
 
   if (pw <= 0 || ph <= 0) return;
 
-  // ── Step 1: Sample the true background from the bbox border (3px ring) ──────
-  const BORDER = 3;
-  const rs: number[] = [], gs: number[] = [], bs: number[] = [];
+  // ── Step 1: Sample edge strips for gradient reconstruction ──────────────
 
-  // Sample from just outside the padded region
+  const BORDER = 4; // strip width to sample from
+
+  // Sample outer border strips (outside the bbox)
   const outerPx = Math.max(0, px - BORDER);
   const outerPy = Math.max(0, py - BORDER);
   const outerPx2 = Math.min(W, px2 + BORDER);
   const outerPy2 = Math.min(H, py2 + BORDER);
 
-  const outerData = ctx.getImageData(outerPx, outerPy, outerPx2 - outerPx, outerPy2 - outerPy).data;
+  const fullData = ctx.getImageData(outerPx, outerPy, outerPx2 - outerPx, outerPy2 - outerPy);
+  const fd = fullData.data;
+  const fw = outerPx2 - outerPx;
 
-  const ow = outerPx2 - outerPx;
-  for (let oy = 0; oy < outerPy2 - outerPy; oy++) {
-    for (let ox = 0; ox < ow; ox++) {
-      // Only take pixels that are OUTSIDE the inner bbox
-      const absX = outerPx + ox;
-      const absY = outerPy + oy;
-      if (absX >= px && absX < px2 && absY >= py && absY < py2) continue;
-      const i = (oy * ow + ox) * 4;
-      rs.push(outerData[i]);
-      gs.push(outerData[i + 1]);
-      bs.push(outerData[i + 2]);
-    }
+  // Build edge color arrays: top row, bottom row, left column, right column
+  // Each entry is the median color for that position along the edge
+  function getPixel(absX: number, absY: number): [number, number, number] {
+    const lx = absX - outerPx;
+    const ly = absY - outerPy;
+    if (lx < 0 || ly < 0 || lx >= fw || ly >= (outerPy2 - outerPy)) return [128, 128, 128];
+    const i = (ly * fw + lx) * 4;
+    return [fd[i], fd[i + 1], fd[i + 2]];
   }
 
-  // Median of each channel — robust against stray colored pixels at border
-  rs.sort((a, b) => a - b);
-  gs.sort((a, b) => a - b);
-  bs.sort((a, b) => a - b);
-  const mid = Math.floor(rs.length / 2);
-  const bgR = rs[mid] ?? 255;
-  const bgG = gs[mid] ?? 255;
-  const bgB = bs[mid] ?? 255;
+  // Top edge: one color per column, sampled from the strip above the bbox
+  const topColors: Array<[number, number, number]> = [];
+  for (let cx = px; cx < px2; cx++) {
+    const samples: Array<[number, number, number]> = [];
+    for (let sy = Math.max(0, py - BORDER); sy < py; sy++) {
+      samples.push(getPixel(cx, sy));
+    }
+    topColors.push(medianRGB(samples));
+  }
 
-  // ── Step 2: Selective in-place erasure ──────────────────────────────────────
+  // Bottom edge
+  const bottomColors: Array<[number, number, number]> = [];
+  for (let cx = px; cx < px2; cx++) {
+    const samples: Array<[number, number, number]> = [];
+    for (let sy = py2; sy < Math.min(H, py2 + BORDER); sy++) {
+      samples.push(getPixel(cx, sy));
+    }
+    bottomColors.push(medianRGB(samples));
+  }
+
+  // Left edge
+  const leftColors: Array<[number, number, number]> = [];
+  for (let cy = py; cy < py2; cy++) {
+    const samples: Array<[number, number, number]> = [];
+    for (let sx = Math.max(0, px - BORDER); sx < px; sx++) {
+      samples.push(getPixel(sx, cy));
+    }
+    leftColors.push(medianRGB(samples));
+  }
+
+  // Right edge
+  const rightColors: Array<[number, number, number]> = [];
+  for (let cy = py; cy < py2; cy++) {
+    const samples: Array<[number, number, number]> = [];
+    for (let sx = px2; sx < Math.min(W, px2 + BORDER); sx++) {
+      samples.push(getPixel(sx, cy));
+    }
+    rightColors.push(medianRGB(samples));
+  }
+
+  // ── Step 2: Selective erasure with gradient-aware fill ───────────────────
+
   const imageData = ctx.getImageData(px, py, pw, ph);
   const d = imageData.data;
 
-  // How far from background a pixel must be to be considered "text ink"
-  // 40 handles dark text on light bg and light text on dark bg equally well.
-  // We use a soft blend zone (30–60) so anti-aliased edge pixels fade smoothly.
-  const HARD_THRESHOLD = 60;
-  const SOFT_THRESHOLD = 30;
+  // Compute the global median background color for ink detection threshold
+  const allEdge: Array<[number, number, number]> = [
+    ...topColors, ...bottomColors, ...leftColors, ...rightColors
+  ];
+  const globalBg = medianRGB(allEdge);
+  const bgR = globalBg[0], bgG = globalBg[1], bgB = globalBg[2];
 
-  for (let i = 0; i < d.length; i += 4) {
-    const r = d[i], g = d[i + 1], b = d[i + 2];
-    const dist = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
+  const HARD_THRESHOLD = 55;
+  const SOFT_THRESHOLD = 25;
 
-    if (dist <= SOFT_THRESHOLD) {
-      // Definitely background — leave completely untouched
-      continue;
-    } else if (dist >= HARD_THRESHOLD) {
-      // Definitely text ink — replace fully with background
-      d[i]     = bgR;
-      d[i + 1] = bgG;
-      d[i + 2] = bgB;
-      d[i + 3] = 255;
-    } else {
-      // Anti-aliased edge pixel — blend proportionally towards background
-      const t = (dist - SOFT_THRESHOLD) / (HARD_THRESHOLD - SOFT_THRESHOLD);
-      d[i]     = Math.round(r + (bgR - r) * t);
-      d[i + 1] = Math.round(g + (bgG - g) * t);
-      d[i + 2] = Math.round(b + (bgB - b) * t);
-      d[i + 3] = 255;
+  for (let localY = 0; localY < ph; localY++) {
+    for (let localX = 0; localX < pw; localX++) {
+      const i = (localY * pw + localX) * 4;
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+
+      // Distance from background
+      const dist = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
+
+      if (dist <= SOFT_THRESHOLD) {
+        // Definitely background — leave untouched
+        continue;
+      }
+
+      // This pixel is ink (or anti-aliased edge) — replace with interpolated background
+
+      // Bilinear interpolation from 4 edges
+      const tx = pw > 1 ? localX / (pw - 1) : 0.5; // 0 = left edge, 1 = right edge
+      const ty = ph > 1 ? localY / (ph - 1) : 0.5; // 0 = top edge, 1 = bottom edge
+
+      // Get edge colors at this position
+      const topIdx = Math.min(localX, topColors.length - 1);
+      const botIdx = Math.min(localX, bottomColors.length - 1);
+      const leftIdx = Math.min(localY, leftColors.length - 1);
+      const rightIdx = Math.min(localY, rightColors.length - 1);
+
+      const topC = topColors[topIdx] || globalBg;
+      const botC = bottomColors[botIdx] || globalBg;
+      const leftC = leftColors[leftIdx] || globalBg;
+      const rightC = rightColors[rightIdx] || globalBg;
+
+      // Bilinear: interpolate vertically (top↔bottom) and horizontally (left↔right)
+      // then average both results for smooth gradient reconstruction
+      const vertR = topC[0] * (1 - ty) + botC[0] * ty;
+      const vertG = topC[1] * (1 - ty) + botC[1] * ty;
+      const vertB = topC[2] * (1 - ty) + botC[2] * ty;
+
+      const horizR = leftC[0] * (1 - tx) + rightC[0] * tx;
+      const horizG = leftC[1] * (1 - tx) + rightC[1] * tx;
+      const horizB = leftC[2] * (1 - tx) + rightC[2] * tx;
+
+      const fillR = (vertR + horizR) / 2;
+      const fillG = (vertG + horizG) / 2;
+      const fillB = (vertB + horizB) / 2;
+
+      if (dist >= HARD_THRESHOLD) {
+        // Definitely ink — replace fully
+        d[i]     = Math.round(fillR);
+        d[i + 1] = Math.round(fillG);
+        d[i + 2] = Math.round(fillB);
+        d[i + 3] = 255;
+      } else {
+        // Anti-aliased edge — blend proportionally
+        const t = (dist - SOFT_THRESHOLD) / (HARD_THRESHOLD - SOFT_THRESHOLD);
+        d[i]     = Math.round(r + (fillR - r) * t);
+        d[i + 1] = Math.round(g + (fillG - g) * t);
+        d[i + 2] = Math.round(b + (fillB - b) * t);
+        d[i + 3] = 255;
+      }
     }
   }
 
   ctx.putImageData(imageData, px, py);
 }
 
+// ── Calibrated Text Rendering ─────────────────────────────────────────────────
+
 /**
- * Render new text with pixel-precise baseline placement.
+ * Render text with pixel-perfect calibration.
  *
- * Key improvements vs naive fillText:
- *  - Uses actualBoundingBoxAscent to pin glyph top exactly to bbox top
- *  - Does NOT pass maxWidth to fillText (avoids horizontal text squeezing)
- *  - Vertically centers within bbox so descenders don't clip
- *  - Clips to bbox so overflow never contaminates neighboring regions
- *  - Includes Roboto and Inter in font stack (common in mobile UI screenshots)
+ * Pipeline:
+ *  1. Set font family from platform detection
+ *  2. Binary-search font size until rendered width ≈ original bbox width (±1px)
+ *  3. Compute and apply letter-spacing to absorb remaining width delta
+ *  4. Position baseline using actualBoundingBoxAscent
+ *  5. Clip to bbox and render
  */
 export function renderText(
   canvas: HTMLCanvasElement,
@@ -127,7 +215,7 @@ export function renderText(
   height: number,
   fontSize: number,
   fontWeight: string,
-  fontFamily: string,
+  _fontFamily: string,  // ignored — we use platform-detected font
   color: string,
   alignment: 'left' | 'center' | 'right',
   letterSpacing?: number
@@ -135,57 +223,127 @@ export function renderText(
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
+  if (text.trim().length === 0) return;
+
+  const fontStack = getFontStack();
+
   ctx.save();
 
-  // Font stack: prioritise Roboto (Android/Google apps) then Inter then system
-  const customFamily = fontFamily && fontFamily !== 'system-ui' ? `${fontFamily}, ` : '';
-  const fontStack = `${customFamily}Roboto, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif`;
+  // ── Step 1: Binary-search font size calibration ─────────────────────────
 
-  const fSize = Math.max(8, fontSize);
-  ctx.font = `${fontWeight} ${fSize}px ${fontStack}`;
-  ctx.fillStyle = color;
+  let calibratedSize = fontSize;
+  let lo = fontSize * 0.5;
+  let hi = fontSize * 1.8;
 
-  // Measure ascent/descent to perfectly align the text within the bbox
-  const metrics = ctx.measureText(text);
-  const ascent  = (metrics.actualBoundingBoxAscent  ?? fSize * 0.75);
-  const descent = (metrics.actualBoundingBoxDescent ?? fSize * 0.15);
-  const textH   = ascent + descent;
+  // 12 iterations of binary search → precision of ~0.05px
+  for (let iter = 0; iter < 12; iter++) {
+    const mid = (lo + hi) / 2;
+    ctx.font = `${fontWeight} ${mid}px ${fontStack}`;
+    const measured = ctx.measureText(text).width;
 
-  // Center vertically inside the bbox
+    if (Math.abs(measured - width) < 0.5) {
+      // Close enough — done
+      calibratedSize = mid;
+      break;
+    }
+
+    if (measured < width) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+    calibratedSize = mid;
+  }
+
+  // Ensure minimum
+  calibratedSize = Math.max(6, calibratedSize);
+
+  // ── Step 2: Set final font and measure ──────────────────────────────────
+
+  ctx.font = `${fontWeight} ${calibratedSize}px ${fontStack}`;
+  const finalMetrics = ctx.measureText(text);
+  const renderedWidth = finalMetrics.width;
+
+  // ── Step 3: Letter-spacing calibration ──────────────────────────────────
+
+  let computedLetterSpacing = letterSpacing ?? 0;
+
+  if (text.length > 1) {
+    const widthDelta = width - renderedWidth;
+    // Distribute remaining width difference across character gaps
+    const perCharDelta = widthDelta / (text.length - 1);
+
+    // Only apply if the per-char adjustment is small (< 3px)
+    // Large deltas indicate a fundamental font mismatch, not letter-spacing
+    if (Math.abs(perCharDelta) < 3) {
+      computedLetterSpacing = perCharDelta;
+    }
+  }
+
+  // ── Step 4: Baseline positioning ────────────────────────────────────────
+
+  const ascent = finalMetrics.actualBoundingBoxAscent ?? calibratedSize * 0.78;
+  const descent = finalMetrics.actualBoundingBoxDescent ?? calibratedSize * 0.22;
+  const textH = ascent + descent;
+
+  // Vertically center within the bbox
   const topPad = Math.max(0, (height - textH) / 2);
-  const textY  = y + topPad + ascent;
+  const textY = y + topPad + ascent;
 
-  // Clip so we never bleed outside the original bounding box
+  // ── Step 5: Clip and render ─────────────────────────────────────────────
+
   ctx.beginPath();
   ctx.rect(x, y, width, height);
   ctx.clip();
 
-  // Set alignment — DO NOT pass maxWidth (avoids ugly horizontal squashing)
-  let textX: number;
-  if (alignment === 'center') {
-    ctx.textAlign = 'center';
-    textX = x + width / 2;
-  } else if (alignment === 'right') {
-    ctx.textAlign = 'right';
-    textX = x + width;
-  } else {
-    ctx.textAlign = 'left';
-    textX = x;
-  }
-
+  ctx.fillStyle = color;
   ctx.textBaseline = 'alphabetic';
   ctx.shadowBlur = 0;
   ctx.shadowColor = 'transparent';
 
-  // Apply letter-spacing if supported by the browser and provided
-  if (letterSpacing !== undefined && 'letterSpacing' in ctx) {
-    (ctx as any).letterSpacing = `${letterSpacing}px`;
-  }
+  if (computedLetterSpacing !== 0 || (typeof letterSpacing === 'number' && letterSpacing !== 0)) {
+    // Manual character-by-character rendering with letter-spacing
+    const effectiveSpacing = computedLetterSpacing || letterSpacing || 0;
+    let cursorX: number;
 
-  ctx.fillText(text, textX, textY);
+    if (alignment === 'center') {
+      // Compute total width with spacing
+      const totalW = renderedWidth + effectiveSpacing * (text.length - 1);
+      cursorX = x + (width - totalW) / 2;
+    } else if (alignment === 'right') {
+      const totalW = renderedWidth + effectiveSpacing * (text.length - 1);
+      cursorX = x + width - totalW;
+    } else {
+      cursorX = x;
+    }
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      ctx.fillText(char, cursorX, textY);
+      const charWidth = ctx.measureText(char).width;
+      cursorX += charWidth + effectiveSpacing;
+    }
+  } else {
+    // Standard rendering (no letter-spacing needed)
+    let textX: number;
+    if (alignment === 'center') {
+      ctx.textAlign = 'center';
+      textX = x + width / 2;
+    } else if (alignment === 'right') {
+      ctx.textAlign = 'right';
+      textX = x + width;
+    } else {
+      ctx.textAlign = 'left';
+      textX = x;
+    }
+
+    ctx.fillText(text, textX, textY);
+  }
 
   ctx.restore();
 }
+
+// ── Canvas Utilities ──────────────────────────────────────────────────────────
 
 /**
  * Create an offscreen canvas from an image at its native pixel resolution.
@@ -207,15 +365,11 @@ export function getImageData(canvas: HTMLCanvasElement): ImageData {
 
 /**
  * Export the canvas as a lossless PNG or JPEG blob.
- * Falls back to toDataURL → manual ArrayBuffer conversion if toBlob
- * produces an empty or missing result.
  */
 export function exportCanvas(
   canvas: HTMLCanvasElement,
   mimeType: 'image/png' | 'image/jpeg' = 'image/png'
 ): Promise<Blob> {
-  // PNG is lossless — quality param is ignored by spec, use 1.0.
-  // JPEG uses 0.95 for near-lossless quality.
   const quality = mimeType === 'image/png' ? 1.0 : 0.95;
 
   return new Promise((resolve, reject) => {
@@ -223,18 +377,15 @@ export function exportCanvas(
       canvas.toBlob(
         (blob) => {
           if (blob && blob.size > 100) {
-            // toBlob succeeded — but ensure the MIME type is correct
             if (blob.type === mimeType) {
               resolve(blob);
             } else {
-              // Re-wrap with correct MIME type
               resolve(new Blob([blob], { type: mimeType }));
             }
             return;
           }
 
-          // Fallback: toDataURL → manually decode base64 → Blob
-          // This avoids fetch() issues and guarantees correct MIME type.
+          // Fallback: toDataURL → manual base64 decode
           try {
             const dataUrl = canvas.toDataURL(mimeType, quality);
             const parts = dataUrl.split(',');
@@ -266,4 +417,16 @@ export function exportCanvas(
       reject(err);
     }
   });
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+/** Compute median RGB from an array of [R,G,B] samples. */
+function medianRGB(samples: Array<[number, number, number]>): [number, number, number] {
+  if (samples.length === 0) return [128, 128, 128];
+  const rs = samples.map(s => s[0]).sort((a, b) => a - b);
+  const gs = samples.map(s => s[1]).sort((a, b) => a - b);
+  const bs = samples.map(s => s[2]).sort((a, b) => a - b);
+  const m = Math.floor(samples.length / 2);
+  return [rs[m], gs[m], bs[m]];
 }

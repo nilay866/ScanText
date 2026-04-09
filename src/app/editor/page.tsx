@@ -18,7 +18,8 @@ import {
 } from 'lucide-react';
 import { TextRegion } from '@/lib/types';
 import { runOCR, OCRProgress } from '@/lib/ocr';
-import { inpaintRegion, renderText, imageToCanvas } from '@/lib/inpainting';
+import { inpaintRegion, renderText, imageToCanvas, getImageData } from '@/lib/inpainting';
+import { detectAndLoadFont, getFontStack } from '@/lib/fontLoader';
 
 export default function EditorPage() {
   const router = useRouter();
@@ -110,32 +111,49 @@ export default function EditorPage() {
     img.src = dataUrl;
   }, [router]);
 
-  // Run OCR once image loads
+  // Run OCR + font detection once image loads
   useEffect(() => {
     if (!image) return;
     setIsProcessing(true);
     // Build the pristine canvas once from the original image — never touched again
     pristineCanvasRef.current = imageToCanvas(image);
-    runOCR(image, setProgress)
-      .then((detected) => {
-        setRegions(detected);
+
+    const processImage = async () => {
+      try {
+        // Step 1: Run OCR
+        const detected = await runOCR(image, setProgress);
+
+        // Step 2: Detect platform & load matching font
+        setProgress({ status: 'Loading platform font...', progress: 0.92 });
+        const pristine = pristineCanvasRef.current!;
+        const imgData = getImageData(pristine);
+        const platform = await detectAndLoadFont(image, imgData);
+
+        // Stamp detected platform onto all regions
+        const regionsWithPlatform = detected.map(r => ({
+          ...r,
+          detectedPlatform: platform,
+        }));
+
+        setRegions(regionsWithPlatform);
         setIsProcessing(false);
+
         // Working canvas starts as a clone of the pristine original
-        const p = pristineCanvasRef.current;
-        if (p) {
-          const w = document.createElement('canvas');
-          w.width = p.width;
-          w.height = p.height;
-          w.getContext('2d')!.drawImage(p, 0, 0);
-          workingCanvasRef.current = w;
-        }
-        showNotification(`Detected ${detected.length} text regions`);
-      })
-      .catch((err) => {
-        console.error('OCR failed:', err);
+        const w = document.createElement('canvas');
+        w.width = pristine.width;
+        w.height = pristine.height;
+        w.getContext('2d')!.drawImage(pristine, 0, 0);
+        workingCanvasRef.current = w;
+
+        showNotification(`Detected ${detected.length} regions · ${platform} font loaded`);
+      } catch (err) {
+        console.error('OCR/font loading failed:', err);
         setIsProcessing(false);
-        showNotification('OCR processing failed. Please try again.');
-      });
+        showNotification('Processing failed. Please try again.');
+      }
+    };
+
+    processImage();
   }, [image, showNotification]);
 
   // ----- History (Undo / Redo) -----
@@ -789,13 +807,14 @@ export default function EditorPage() {
         width: Math.max(editingRegion.width * scale + 20, 120),
         minHeight: Math.max(editingRegion.height * scale + 8, 32),
         fontSize: Math.max(editingRegion.fontSize * scale, 12),
-        fontWeight: editingRegion.fontWeight === 'bold' ? 700 : 400,
-        fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif',
+        fontWeight: editingRegion.fontWeightNumeric || (editingRegion.fontWeight === 'bold' ? 700 : 400),
+        fontFamily: getFontStack(),
         color: editingRegion.color,
         background: 'transparent',
         border: 'none',
-        outline: '1px dashed rgba(99, 102, 241, 0.5)',
+        outline: '1px dashed rgba(99, 102, 241, 0.3)',
         lineHeight: 1.2,
+        letterSpacing: editingRegion.calibratedLetterSpacing ? `${editingRegion.calibratedLetterSpacing}px` : 'normal',
         resize: 'none' as const,
       }
     : {};
