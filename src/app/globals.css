@@ -435,15 +435,10 @@ html, body {
 
 .text-edit-input {
   position: absolute;
-  background: rgba(0,0,0,0.7);
-  border: 2px solid var(--accent-primary);
-  border-radius: 4px;
-  color: white;
-  font-family: 'Inter', sans-serif;
-  padding: 2px 4px;
-  outline: none;
+  padding: 0;
+  margin: 0;
   z-index: 500;
-  box-shadow: 0 0 20px var(--accent-glow);
+  overflow: hidden;
 }
 
 /* =====================================

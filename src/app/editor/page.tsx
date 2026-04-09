@@ -166,27 +166,31 @@ export default function EditorPage() {
     return dest;
   }, []);
 
-  // Apply a specific state from history
-  const applyHistoryState = useCallback((newRegions: TextRegion[]) => {
-    setRegions(newRegions);
-    // Always start from the PRISTINE original — never the working canvas
+  const rebuildWorkingCanvas = useCallback((currentRegions: TextRegion[], activeEditId: string | null) => {
     const freshCanvas = clonePristine();
-    newRegions.forEach((r) => {
-      if (r.editedText !== r.text) {
+    currentRegions.forEach((r) => {
+      if (r.editedText !== r.text || r.id === activeEditId) {
         inpaintRegion(freshCanvas, r.x, r.y, r.width, r.height, r.backgroundColor);
-        if (r.editedText.trim().length > 0) {
+        if (r.id !== activeEditId && r.editedText.trim().length > 0) {
           renderText(
             freshCanvas,
             r.editedText,
             r.x, r.y, r.width, r.height,
             r.fontSize, r.fontWeight, r.fontFamily,
-            r.color, r.alignment
+            r.color, r.alignment,
+            r.letterSpacing
           );
         }
       }
     });
     workingCanvasRef.current = freshCanvas;
   }, [clonePristine]);
+
+  // Apply a specific state from history
+  const applyHistoryState = useCallback((newRegions: TextRegion[], overrideEditId?: string | null) => {
+    setRegions(newRegions);
+    rebuildWorkingCanvas(newRegions, overrideEditId !== undefined ? overrideEditId : editingRegionIdRef.current);
+  }, [rebuildWorkingCanvas]);
 
   const handleUndo = useCallback(() => {
     setHistoryIndex((prevIndex) => {
@@ -258,7 +262,7 @@ export default function EditorPage() {
         setHistoryIndex((i) => i + 1);
       }
 
-      applyHistoryState(updated);
+      applyHistoryState(updated, null);
       return updated;
     });
 
@@ -481,6 +485,8 @@ export default function EditorPage() {
       if (wasSelected) {
         // Second click on same region → enter edit mode
         setEditingRegionId(region.id);
+        rebuildWorkingCanvas(regionsRef.current, region.id);
+        drawCanvas();
         setEditText(region.editedText);
         setTimeout(() => editInputRef.current?.focus(), 50);
       } else {
@@ -489,7 +495,7 @@ export default function EditorPage() {
         setEditingRegionId(null);
       }
     },
-    [screenToImage, findRegionAt, commitEdit]
+    [screenToImage, findRegionAt, commitEdit, rebuildWorkingCanvas, drawCanvas]
   );
 
   const handleDoubleClick = useCallback(
@@ -504,11 +510,13 @@ export default function EditorPage() {
         // Enter edit mode directly
         setSelectedRegionId(region.id);
         setEditingRegionId(region.id);
+        rebuildWorkingCanvas(regionsRef.current, region.id);
+        drawCanvas();
         setEditText(region.editedText);
         setTimeout(() => editInputRef.current?.focus(), 50);
       }
     },
-    [screenToImage, findRegionAt, commitEdit]
+    [screenToImage, findRegionAt, commitEdit, rebuildWorkingCanvas, drawCanvas]
   );
 
   const handleMouseMove = useCallback(
@@ -586,10 +594,12 @@ export default function EditorPage() {
       }
       if (e.key === 'Escape') {
         setEditingRegionId(null);
+        rebuildWorkingCanvas(regionsRef.current, null);
+        drawCanvas();
         setEditText('');
       }
     },
-    [commitEdit]
+    [commitEdit, rebuildWorkingCanvas, drawCanvas]
   );
 
   const handleEditBlur = useCallback(() => {
@@ -782,6 +792,9 @@ export default function EditorPage() {
         fontWeight: editingRegion.fontWeight === 'bold' ? 700 : 400,
         fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif',
         color: editingRegion.color,
+        background: 'transparent',
+        border: 'none',
+        outline: '1px dashed rgba(99, 102, 241, 0.5)',
         lineHeight: 1.2,
         resize: 'none' as const,
       }
