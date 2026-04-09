@@ -2,27 +2,37 @@ pipeline {
     agent any
 
     stages {
+
         stage('Clone') {
             steps {
-                echo "Cloning repo..."
+                echo "Cloning repository..."
+                git 'https://github.com/nilay866/ScanText.git'
             }
         }
 
         stage('Build') {
             steps {
-                echo "Building project..."
+                echo "Building application..."
             }
         }
 
         stage('Test') {
             steps {
-                echo "Testing..."
+                echo "Running tests..."
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                script {
+                    docker.build("scantext-app")
+                }
             }
         }
 
         stage('Deploy') {
             steps {
-                echo "Deploying..."
+                sh 'docker run -d -p 8081:80 scantext-app'
             }
         }
     }
