@@ -503,9 +503,10 @@ export default function EditorPage() {
       if (wasSelected) {
         // Second click on same region → enter edit mode
         setEditingRegionId(region.id);
-        rebuildWorkingCanvas(regionsRef.current, region.id);
-        drawCanvas();
         setEditText(region.editedText);
+        // Erase original text from canvas, then force redraw
+        rebuildWorkingCanvas(regionsRef.current, region.id);
+        requestAnimationFrame(() => drawCanvas());
         setTimeout(() => editInputRef.current?.focus(), 50);
       } else {
         // First click → select
@@ -528,9 +529,10 @@ export default function EditorPage() {
         // Enter edit mode directly
         setSelectedRegionId(region.id);
         setEditingRegionId(region.id);
-        rebuildWorkingCanvas(regionsRef.current, region.id);
-        drawCanvas();
         setEditText(region.editedText);
+        // Erase original text from canvas, then force redraw
+        rebuildWorkingCanvas(regionsRef.current, region.id);
+        requestAnimationFrame(() => drawCanvas());
         setTimeout(() => editInputRef.current?.focus(), 50);
       }
     },
@@ -804,18 +806,14 @@ export default function EditorPage() {
     ? {
         left: editingRegion.x * scale + offset.x,
         top: editingRegion.y * scale + offset.y,
-        width: Math.max(editingRegion.width * scale + 20, 120),
-        minHeight: Math.max(editingRegion.height * scale + 8, 32),
-        fontSize: Math.max(editingRegion.fontSize * scale, 12),
+        width: editingRegion.width * scale,
+        height: editingRegion.height * scale,
+        fontSize: Math.max(editingRegion.fontSize * scale, 10),
         fontWeight: editingRegion.fontWeightNumeric || (editingRegion.fontWeight === 'bold' ? 700 : 400),
         fontFamily: getFontStack(),
         color: editingRegion.color,
-        background: 'transparent',
-        border: 'none',
-        outline: '1px dashed rgba(99, 102, 241, 0.3)',
         lineHeight: 1.2,
         letterSpacing: editingRegion.calibratedLetterSpacing ? `${editingRegion.calibratedLetterSpacing}px` : 'normal',
-        resize: 'none' as const,
       }
     : {};
 
