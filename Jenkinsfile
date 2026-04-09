@@ -5,8 +5,7 @@ pipeline {
 
         stage('Clone') {
             steps {
-                echo "Cloning repository..."
-                git branch: 'main', url: 'https://github.com/nilay866/ScanText.git'
+                echo "Repository already cloned by Jenkins"
             }
         }
 
