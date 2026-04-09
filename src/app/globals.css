@@ -608,9 +608,10 @@ html, body {
     padding: 0.5rem 0.6rem;
   }
 
-  /* Hide button text on very small screens to save space */
+  /* Keep button text visible but slightly smaller on mobile */
   .btn-text {
-    display: none;
+    display: inline;
+    font-size: 0.75rem;
   }
 
   /* Make zoom display smaller */
